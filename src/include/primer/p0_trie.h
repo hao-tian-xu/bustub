@@ -225,8 +225,6 @@ class Trie {
   Trie() : root_(std::make_unique<TrieNode>('\0')) {};
 
   /**
-   * TODO: concurrency
-   *
    * @brief Insert key-value pair into the trie.
    *
    * If the key is an empty string, return false immediately.
@@ -252,7 +250,9 @@ class Trie {
    */
   template <typename T>
   bool Insert(const std::string &key, T value) {
-    if (key.empty()) { return false; }
+    latch_.WLock();
+
+    if (key.empty()) { latch_.WUnlock(); return false; }
 
     auto node = &root_;
     auto character = key.begin();
@@ -265,17 +265,15 @@ class Trie {
       }
       character++;
     }
-    character--;
-
-    if (node->get()->IsEndNode()) { return false; }
+    if (node->get()->IsEndNode()) { latch_.WUnlock(); return false; }
 
     *node = std::make_unique<TrieNodeWithValue<T>>(std::move(**node), value);  // memo: same as reset()
+
+    latch_.WUnlock();
     return true;
   }
 
   /**
-   * TODO: concurrency
-   *
    * @brief Remove key value pair from the trie.
    * This function should also remove nodes that are no longer part of another
    * key. If key is empty or not found, return false.
@@ -291,7 +289,9 @@ class Trie {
    * @return True if the key exists and is removed, false otherwise
    */
   bool Remove(const std::string &key) {
-    if (key.empty()) { return false; }
+    latch_.WLock();
+
+    if (key.empty()) { latch_.WUnlock(); return false; }
 
     const auto n = static_cast<int32_t>(key.size());
     auto node = &root_;
@@ -299,11 +299,11 @@ class Trie {
 
     // find the end node
     for (int32_t  i = 0; i < n; i++) {
-      if (!node->get()->HasChild(key[i])) { return false; }
+      if (!node->get()->HasChild(key[i])) { latch_.WUnlock(); return false; }
       nodes.push(node);
       node = node->get()->GetChildNode(key[i]);
     }
-    if (!node->get()->IsEndNode()) { return false; }
+    if (!node->get()->IsEndNode()) { latch_.WUnlock(); return false; }
 
     // delete nodes with no children
     node->get()->SetEndNode(false);
@@ -319,12 +319,11 @@ class Trie {
       }
     }
 
+    latch_.WUnlock();
     return true;
   }
 
   /**
-   * TODO: concurrency
-   *
    * @brief Get the corresponding value of type T given its key.
    * If key is empty, set success to false.
    * If key does not exist in trie, set success to false.
@@ -342,23 +341,26 @@ class Trie {
    */
   template <typename T>
   T GetValue(const std::string &key, bool *success) {
+    latch_.RLock();
 
     *success = false;
-    if (key.empty()) { return {}; }
+    if (key.empty()) { latch_.RUnlock(); return {}; }
 
     auto node = &root_;
     auto character = key.begin();
 
     while (character != key.end()) {
-      if (!node->get()->HasChild(*character)) { return {}; }
+      if (!node->get()->HasChild(*character)) { latch_.RUnlock(); return {}; }
       node = node->get()->GetChildNode(*character);
       character++;
     }
 
     auto end_node = dynamic_cast<TrieNodeWithValue<T>*>(node->get());
-    if (not end_node) { return {}; }
+    if (not end_node) { latch_.RUnlock(); return {}; }
 
     *success = true;
+
+    latch_.RUnlock();
     return end_node->GetValue();
   }
 };
