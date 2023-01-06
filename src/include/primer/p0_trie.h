@@ -13,6 +13,7 @@
 #pragma once
 
 #include <memory>
+#include <stack>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -224,7 +225,7 @@ class Trie {
   Trie() : root_(std::make_unique<TrieNode>('\0')) {};
 
   /**
-   * TODO(P0): Add implementation
+   * TODO: concurrency
    *
    * @brief Insert key-value pair into the trie.
    *
@@ -251,11 +252,29 @@ class Trie {
    */
   template <typename T>
   bool Insert(const std::string &key, T value) {
-    return false;
+    if (key.empty()) { return false; }
+
+    auto node = &root_;
+    auto character = key.begin();
+
+    while (character != key.end()) {
+      if (node->get()->HasChild(*character)) {
+        node = node->get()->GetChildNode(*character);
+      } else {
+        node = node->get()->InsertChildNode(*character, std::make_unique<TrieNode>(*character));
+      }
+      character++;
+    }
+    character--;
+
+    if (node->get()->IsEndNode()) { return false; }
+
+    *node = std::make_unique<TrieNodeWithValue<T>>(std::move(**node), value);  // memo: same as reset()
+    return true;
   }
 
   /**
-   * TODO(P0): Add implementation
+   * TODO: concurrency
    *
    * @brief Remove key value pair from the trie.
    * This function should also remove nodes that are no longer part of another
@@ -271,10 +290,40 @@ class Trie {
    * @param key Key used to traverse the trie and find the correct node
    * @return True if the key exists and is removed, false otherwise
    */
-  bool Remove(const std::string &key) { return false; }
+  bool Remove(const std::string &key) {
+    if (key.empty()) { return false; }
+
+    const auto n = static_cast<int32_t>(key.size());
+    auto node = &root_;
+    std::stack<std::unique_ptr<TrieNode>*> nodes;
+
+    // find the end node
+    for (int32_t  i = 0; i < n; i++) {
+      if (!node->get()->HasChild(key[i])) { return false; }
+      nodes.push(node);
+      node = node->get()->GetChildNode(key[i]);
+    }
+    if (!node->get()->IsEndNode()) { return false; }
+
+    // delete nodes with no children
+    node->get()->SetEndNode(false);
+    bool remove_node;
+    for (int32_t i = n - 1; i >= 0; i--) {
+      remove_node = !node->get()->IsEndNode() && !node->get()->HasChildren();
+      node = nodes.top();
+      nodes.pop();
+      if (remove_node) {
+        node->get()->RemoveChildNode(key[i]);
+      } else {
+        break;
+      }
+    }
+
+    return true;
+  }
 
   /**
-   * TODO(P0): Add implementation
+   * TODO: concurrency
    *
    * @brief Get the corresponding value of type T given its key.
    * If key is empty, set success to false.
@@ -293,8 +342,24 @@ class Trie {
    */
   template <typename T>
   T GetValue(const std::string &key, bool *success) {
+
     *success = false;
-    return {};
+    if (key.empty()) { return {}; }
+
+    auto node = &root_;
+    auto character = key.begin();
+
+    while (character != key.end()) {
+      if (!node->get()->HasChild(*character)) { return {}; }
+      node = node->get()->GetChildNode(*character);
+      character++;
+    }
+
+    auto end_node = dynamic_cast<TrieNodeWithValue<T>*>(node->get());
+    if (not end_node) { return {}; }
+
+    *success = true;
+    return end_node->GetValue();
   }
 };
 }  // namespace bustub
